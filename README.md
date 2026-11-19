@@ -183,6 +183,10 @@ idf.py fullclean && idf.py build
 
 固件需要配合 [MeowMusicServer 多音源增强版](https://github.com/joe12801/MeowMusicServer-multisource) 使用，在电脑上把它跑起来（监听 `2233` 端口）之后，就可以对设备说「你好小智，播放稻香」了。
 
+服务器支持 **Windows / Linux / Docker** 三种部署方式，具体步骤（含 ffmpeg 安装、防火墙放行、开机自启、systemd 服务）见该仓库 README 的「部署」章节。
+
+> 最容易踩的坑：服务器防火墙没放行 `2233` 端口，表现是设备连上了 WiFi 但点歌一直没反应。
+
 ---
 
 ## 语音指令示例
