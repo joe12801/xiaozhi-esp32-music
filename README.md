@@ -90,7 +90,7 @@ idf.py -p COM4 flash monitor
 
 ### 5. 启动音乐服务器
 
-固件需要配合 [MeowMusicServer](https://github.com/OmniX-Space/MeowMusicServer) 使用，在电脑上把它跑起来（监听 `2233` 端口）之后，就可以对设备说「你好小智，播放稻香」了。
+固件需要配合 [MeowMusicServer 多音源增强版](https://github.com/joe12801/MeowMusicServer-multisource) 使用，在电脑上把它跑起来（监听 `2233` 端口）之后，就可以对设备说「你好小智，播放稻香」了。
 
 ---
 
