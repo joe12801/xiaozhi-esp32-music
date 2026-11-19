@@ -38,15 +38,77 @@
 
 ## 快速开始
 
-### 1. 准备环境
+### 1. 准备环境（Windows / Linux 二选一）
 
-- [ESP-IDF v5.5.x](https://docs.espressif.com/projects/esp-idf/zh_CN/latest/esp32s3/get-started/)
-- 已安装对应版本的 Python 与工具链
+需要 [ESP-IDF v5.5.x](https://docs.espressif.com/projects/esp-idf/zh_CN/latest/esp32s3/get-started/)。
 
-```bash
-# Windows 下先进入 IDF 环境
+#### Windows
+
+**方式 A：官方安装器（新手推荐）**
+
+1. 打开 https://dl.espressif.com/dl/esp-idf/ ，下载 **ESP-IDF Installer**（Windows 版）
+2. 安装时选择 **ESP-IDF v5.5.x**
+3. 装完后从开始菜单打开 **「ESP-IDF 5.5 PowerShell」** —— 这个终端里环境已经自动加载好了，直接就能用 `idf.py`
+
+**方式 B：已有本地 IDF 环境（本项目作者的方式）**
+
+在普通 PowerShell 里手动加载环境：
+
+```powershell
 E:\Espressif\frameworks\esp-idf-v5.5.4\export.ps1
 ```
+
+> 注意：`export.ps1` 必须用 `. ` 调用（点 + 空格），否则环境变量不会留在当前会话。
+
+#### Linux
+
+**① 装系统依赖（Ubuntu / Debian）**
+
+```bash
+sudo apt update
+sudo apt install -y git wget flex bison gperf python3 python3-pip python3-venv \
+  cmake ninja-build ccache libffi-dev libssl-dev dfu-util libusb-1.0-0
+```
+
+**② 拉取 ESP-IDF v5.5.4 并安装工具链**
+
+```bash
+mkdir -p ~/esp && cd ~/esp
+git clone -b v5.5.4 --recursive https://github.com/espressif/esp-idf.git
+
+cd ~/esp/esp-idf
+./install.sh esp32s3      # 只装 S3 的工具链，省几 GB 空间
+```
+
+**③ 每次开新终端加载环境**
+
+```bash
+. $HOME/esp/esp-idf/export.sh
+```
+
+嫌麻烦可以加个别名：
+
+```bash
+echo 'alias get_idf=". $HOME/esp/esp-idf/export.sh"' >> ~/.bashrc
+source ~/.bashrc
+# 以后直接敲 get_idf
+```
+
+#### 串口设备名（两个平台不一样）
+
+| 平台 | 设备名 | 查看方式 |
+|---|---|---|
+| Windows | `COM3`、`COM4`… | 设备管理器 → 端口，或 `mode` |
+| Linux | `/dev/ttyUSB0`、`/dev/ttyACM0` | `ls /dev/ttyUSB* /dev/ttyACM*` |
+
+Linux 下普通用户默认**没有串口权限**，会报 `Permission denied`。执行一次并重新登录：
+
+```bash
+sudo usermod -aG dialout $USER
+```
+
+> CH340 芯片的板子在 Linux 上通常是 `/dev/ttyUSB0`；原生 USB 的 S3 是 `/dev/ttyACM0`。
+> 如果插上后两个都没有，检查 `dmesg | tail` 有没有识别到设备。
 
 ### 2. 修改两处配置（必做）
 
@@ -81,12 +143,41 @@ idf.py menuconfig
 
 ### 4. 编译与烧录
 
-```bash
+**Windows（PowerShell）：**
+
+```powershell
 idf.py build
 idf.py -p COM4 flash monitor
 ```
 
-把 `COM4` 换成你实际的串口号。烧录完成后设备会自动连接 WiFi，屏幕显示 IP 地址。
+**Linux：**
+
+```bash
+idf.py build
+idf.py -p /dev/ttyUSB0 flash monitor
+```
+
+把端口换成你自己实际的（Windows 形如 `COM4`，Linux 形如 `/dev/ttyUSB0`）。
+
+烧录完成后设备会自动连接 WiFi，OLED 屏幕上会显示拿到的 IP 地址。
+
+常用操作：
+
+```bash
+# 退出串口监视器
+Ctrl + ]
+
+# 只烧录不监视
+idf.py -p COM4 flash
+
+# 清空 NVS（改过 WiFi 密码但设备还在连旧的，用这个）
+idf.py -p COM4 erase-flash
+
+# 编译异常时彻底重来
+idf.py fullclean && idf.py build
+```
+
+> **编译卡住/极慢**：如果开了 ccache 反而更慢，可以临时禁掉——Windows 用 `$env:CCACHE_DISABLE=1`，Linux 用 `export CCACHE_DISABLE=1`。首次编译拉 `managed_components` 需要好网络，国内建议先挂代理。
 
 ### 5. 启动音乐服务器
 
