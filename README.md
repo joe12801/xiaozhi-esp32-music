@@ -6,6 +6,9 @@
 
 本项目基于 [OmniX-Space/xiaozhi-esp32](https://github.com/OmniX-Space/xiaozhi-esp32) 修改，上游完整说明见 [README_UPSTREAM.md](README_UPSTREAM.md)。
 
+> 📦 **不想自己编译？** 直接下载 [已编译固件 v1.0.0](https://github.com/joe12801/xiaozhi-esp32-music/releases/latest)（整包 bin，烧录地址 `0x0`）。
+> 注意：发布包**不含 WiFi 凭据**（刷机后走配网），且服务器地址是示例值 `192.168.1.100` —— 不是你的 IP 就得自己改 `main/server_config.h` 重新编译。
+
 ---
 
 ## 功能特性
@@ -112,14 +115,21 @@ sudo usermod -aG dialout $USER
 
 ### 2. 修改两处配置（必做）
 
-**① WiFi 名称和密码** — `main/main.cc`
+**① WiFi 名称和密码** — `main/main.cc`（可选）
 
 ```c
-#define FALLBACK_WIFI_SSID     "YOUR_WIFI_SSID"      // 改成你的 WiFi 名
-#define FALLBACK_WIFI_PASSWORD "YOUR_WIFI_PASSWORD"  // 改成你的 WiFi 密码
+#define FALLBACK_WIFI_SSID     ""     // 填你的 WiFi 名，留空则走正常配网
+#define FALLBACK_WIFI_PASSWORD ""     // 填你的 WiFi 密码
 ```
 
-这段逻辑只在 NVS 里**没有任何 WiFi 记录**时才写入，不会覆盖你后来手动配网的结果。
+留空是默认行为：固件不内置任何 WiFi，刷机后首次启动进入配网流程（手机连设备热点配置）。
+填上则会在 NVS 里没有任何 WiFi 记录时**自动写入**，省掉配网步骤；已配过网时不会覆盖。
+
+也可以在命令行覆盖，不必改源码：
+
+```bash
+idf.py -DFALLBACK_WIFI_SSID=\"MyWiFi\" -DFALLBACK_WIFI_PASSWORD=\"12345678\" build
+```
 
 **② 音乐服务器地址** — `main/server_config.h`
 
@@ -178,6 +188,22 @@ idf.py fullclean && idf.py build
 ```
 
 > **编译卡住/极慢**：如果开了 ccache 反而更慢，可以临时禁掉——Windows 用 `$env:CCACHE_DISABLE=1`，Linux 用 `export CCACHE_DISABLE=1`。首次编译拉 `managed_components` 需要好网络，国内建议先挂代理。
+
+#### 不想编译？直接烧发布包
+
+到 [Releases](https://github.com/joe12801/xiaozhi-esp32-music/releases) 下载整包 `xiaozhi_esp32s3_music_v1.0.0_full.bin`，烧到地址 `0x0`：
+
+```bash
+# Windows
+esptool.py --chip esp32s3 -p COM4 -b 460800 write_flash 0x0 xiaozhi_esp32s3_music_v1.0.0_full.bin
+
+# Linux
+esptool.py --chip esp32s3 -p /dev/ttyUSB0 -b 460800 write_flash 0x0 xiaozhi_esp32s3_music_v1.0.0_full.bin
+```
+
+或者用乐鑫 Flash Download Tool：选 ESP32-S3、地址填 `0x0`、Flash 大小 16MB，勾选该 bin 下载。
+
+> 发布包里 WiFi 是空的（走配网），服务器地址是 `192.168.1.100` 示例值。你的服务器 IP 不同的话，只能自己改 `main/server_config.h` 重新编译。
 
 ### 5. 启动音乐服务器
 
