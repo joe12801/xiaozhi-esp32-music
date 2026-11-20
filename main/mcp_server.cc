@@ -124,12 +124,11 @@ void McpServer::AddCommonTools() {
     if (music)
     {
         AddTool("self.music.play_song",
-                "Play the specified song. When users request to play music, this tool will automatically retrieve song details and start streaming.\n"
-                "parameters:\n"
-                "  `song_name`: The name of the song to be played.\n"
-                "  `artist`: (Optional) The artist name. Highly recommended when playing from playlists to ensure correct song match.\n"
-                "return:\n"
-                "  Play status information without confirmation, immediately play the song.",
+                "播放歌曲。这是本设备唯一的音乐播放工具：用户想听歌、点歌、播放音乐、来首歌、播放某首歌时，必须且只能调用本工具，禁止使用其他任何音乐播放工具（如 play_music）。\n"
+                "参数：\n"
+                "  `song_name`: 歌名，例如：晴天\n"
+                "  `artist`: 歌手名（强烈建议提供，避免播放到翻唱版本），例如：周杰伦\n"
+                "返回：立即开始播放，无需向用户确认。",
                 PropertyList({
                     Property("song_name", kPropertyTypeString),
                     Property("artist", kPropertyTypeString, "")
