@@ -782,6 +782,19 @@ void Esp32Music::PlayAudioStream() {
         
         // 状态转换：说话中-》聆听中-》待机状态-》播放音乐
         if (current_state == kDeviceStateListening || current_state == kDeviceStateSpeaking) {
+            // 已经真正在出声播放时又进入 listening/speaking，说明用户喊了唤醒词要打断，
+            // 必须真正停止音乐；绝不能把状态切回 idle 后 continue 继续播，
+            // 否则就是"音乐断一下又继续播放"的现象。
+            if (total_played > 0) {
+                ESP_LOGI(TAG, "Barge-in while music playing, stopping music (total_played=%d)", total_played);
+                is_playing_ = false;
+                is_downloading_ = false;
+                auto display = Board::GetInstance().GetDisplay();
+                if (display) {
+                    display->ClearMusicInfo();
+                }
+                break;
+            }
             if (current_state == kDeviceStateSpeaking) {
                 ESP_LOGI(TAG, "Device is in speaking state, switching to listening state for music playback");
             }

@@ -19,6 +19,7 @@ public:
     virtual bool StopStreaming() = 0;  // 停止流式播放
     virtual size_t GetBufferSize() const = 0;
     virtual bool IsDownloading() const = 0;
+    virtual bool IsPlaying() const = 0;  // 是否正在播放（用于唤醒打断判断）
     virtual int16_t* GetAudioData() = 0;
     
     // 音乐播放信息获取方法

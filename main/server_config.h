@@ -19,7 +19,12 @@
 
 // 👇 在这里修改您的服务器地址
 // 示例：运行 MeowMusicServer 的电脑局域网 IP，ESP32 与电脑需在同一局域网
-#define MUSIC_SERVER_URL "http://192.168.1.100:2233"
+//
+// 也可以在编译时覆盖，不用改这个文件：
+//   idf.py -DMUSIC_SERVER_URL=\"http://192.168.1.100:2233\" build
+#ifndef MUSIC_SERVER_URL
+#define MUSIC_SERVER_URL "http://192.168.2.220:2233"
+#endif
 
 // 自动生成的完整API地址（不要修改）
 #define MUSIC_API_URL MUSIC_SERVER_URL "/stream_pcm"

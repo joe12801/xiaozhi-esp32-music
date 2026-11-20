@@ -62,6 +62,8 @@ public:
     void SendMcpMessage(const std::string& payload);
     void SetAecMode(AecMode mode);
     AecMode GetAecMode() const { return aec_mode_; }
+    // 当前 AEC 模式对应的默认聆听模式（对齐官方新版，供打断后重新进入聆听用）
+    ListeningMode GetDefaultListeningMode() const { return aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime; }
     void PlaySound(const std::string_view& sound);
     // 新增：接收外部音频数据（如音乐播放）
     void AddAudioData(AudioStreamPacket&& packet);
@@ -93,6 +95,7 @@ private:
     TaskHandle_t main_event_loop_task_handle_ = nullptr;
 
     void OnWakeWordDetected();
+    bool play_popup_on_listening_ = false;  // 打断说话后进入 listening 时播放提示音
     void CheckNewVersion(Ota& ota);
     void CheckAssetsVersion();
     void ShowActivationCode(const std::string& code, const std::string& message);

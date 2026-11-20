@@ -646,6 +646,22 @@ void Application::OnWakeWordDetected() {
     }
 
     if (device_state_ == kDeviceStateIdle) {
+        // 音乐可能在 idle 状态下播放（本固件的 self.music.play_song）。
+        // 叫"你好小智"时要先停掉音乐，否则音乐播放线程会和语音对话抢音频通道。
+        auto music = Board::GetInstance().GetMusic();
+        // 用播放器的真实状态判断，而不是 is_music_playing_（该标志只在闹钟路径置位，
+        // self.music.play_song 点歌时为 false，会导致音乐停不下来）。
+        bool music_active = music && (music->IsPlaying() || music->IsDownloading());
+        if (music_active) {
+            ESP_LOGI(TAG, "Wake word during music playback, stopping music first");
+            music->StopStreaming();
+            is_music_playing_ = false;
+            auto display = Board::GetInstance().GetDisplay();
+            if (display) {
+                display->ClearMusicInfo();
+            }
+        }
+
         audio_service_.EncodeWakeWord();
 
         if (!protocol_->IsAudioChannelOpened()) {
@@ -665,14 +681,20 @@ void Application::OnWakeWordDetected() {
         }
         // Set the chat state to wake word detected
         protocol_->SendWakeWordDetected(wake_word);
-        SetListeningMode(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
+        SetListeningMode(GetDefaultListeningMode());
 #else
-        SetListeningMode(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
+        SetListeningMode(GetDefaultListeningMode());
         // Play the pop up sound to indicate the wake word is detected
         audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
 #endif
     } else if (device_state_ == kDeviceStateSpeaking) {
+        // 对齐官方新版：打断说话(TTS)后清发送队列并重新进入 listening，
+        // 这样用户可以直接接着说，不用再叫一次唤醒词。
         AbortSpeaking(kAbortReasonWakeWordDetected);
+        while (audio_service_.PopPacketFromSendQueue())
+            ;
+        play_popup_on_listening_ = true;
+        SetListeningMode(GetDefaultListeningMode());
     } else if (device_state_ == kDeviceStateActivating) {
         SetDeviceState(kDeviceStateIdle);
     }
@@ -727,11 +749,17 @@ void Application::SetDeviceState(DeviceState state) {
             display->SetEmotion("neutral");
 
             // Make sure the audio processor is running
-            if (!audio_service_.IsAudioProcessorRunning()) {
+            // play_popup_on_listening_: 打断说话后必须强制重新 SendStartListening，
+            // 否则 realtime 模式下 audio processor 仍在跑，会漏发 start listening。
+            if (play_popup_on_listening_ || !audio_service_.IsAudioProcessorRunning()) {
                 // Send the start listening command
                 protocol_->SendStartListening(listening_mode_);
                 audio_service_.EnableVoiceProcessing(true);
                 audio_service_.EnableWakeWordDetection(false);
+                if (play_popup_on_listening_) {
+                    play_popup_on_listening_ = false;
+                    audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
+                }
             }
             break;
         case kDeviceStateSpeaking:
