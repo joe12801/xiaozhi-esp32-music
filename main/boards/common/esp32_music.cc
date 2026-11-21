@@ -327,6 +327,10 @@ bool Esp32Music::Download(const std::string& song_name, const std::string& artis
     http->SetHeader("User-Agent", "ESP32-Music-Player/1.0");
     http->SetHeader("Accept", "application/json");
     
+    // 默认超时 30s 对多源解析偏紧：走到 GDStudio 兜底（deadline 14s）再加
+    // mp3api 外部源探链（约 4~15s）时容易踩线，放宽到 60s。
+    http->SetTimeout(60000);
+    
     // 添加ESP32认证头
     add_auth_headers(http.get());
     
@@ -605,6 +609,12 @@ void Esp32Music::DownloadAudioStream(const std::string& music_url) {
     http->SetHeader("User-Agent", "ESP32-Music-Player/1.0");
     http->SetHeader("Accept", "*/*");
     http->SetHeader("Range", "bytes=0-");  // 支持断点续传
+
+    // 服务端 /stream_live 对「国内下架、只能走 mp3api 外部源」的歌要完整转码后才定长返回，
+    // 首次约 60~90s（上游 YouTube 拉流），默认 30s 超时会让设备直接失败、看起来像没声音。
+    // 缓存命中后秒回，只有第一次慢，故放宽到 180s。
+    http->SetTimeout(180000);
+    
     
     // 添加ESP32认证头
     add_auth_headers(http.get());
