@@ -654,7 +654,15 @@ void Application::OnWakeWordDetected() {
         bool music_active = music && (music->IsPlaying() || music->IsDownloading());
         if (music_active) {
             ESP_LOGI(TAG, "Wake word during music playback, stopping music first");
-            music->StopStreaming();
+            // 关键：歌单模式下必须停整个歌单，不能只 StopStreaming()。
+            // 只停当前流会让歌单管理线程误以为"这首播完了"，立刻自动切下一首，
+            // 把用户刚说的话盖掉（表现为"打断不了、停一下又播下一首"）。
+            if (music->IsPlaylistMode()) {
+                music->StopPlaylist();
+                ESP_LOGI(TAG, "Playlist mode active, stopped whole playlist for barge-in");
+            } else {
+                music->StopStreaming();
+            }
             is_music_playing_ = false;
             auto display = Board::GetInstance().GetDisplay();
             if (display) {
