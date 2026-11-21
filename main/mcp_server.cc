@@ -50,6 +50,41 @@ static std::string find_playlist_id_by_name(const std::string& name) {
     return id;
 }
 
+// 按歌单名取出该歌单的 songs 数组 JSON 字符串（供语音"播放XX歌单"直接播放，
+// 避免让大模型先把全部歌单JSON读进去、再拼一个大JSON回来，那会长时间阻塞音频任务导致卡死）。
+// 找到返回 songs 数组的 JSON；找不到返回空字符串。调用方负责解析。
+static std::string find_playlist_songs_json_by_name(const std::string& name) {
+    auto& dm = DeviceManager::GetInstance();
+    std::string list_json = dm.GetUserPlaylists();
+    if (list_json.empty()) {
+        return "";
+    }
+    cJSON* arr = cJSON_Parse(list_json.c_str());
+    if (!arr || !cJSON_IsArray(arr)) {
+        if (arr) cJSON_Delete(arr);
+        return "";
+    }
+    std::string result;
+    int n = cJSON_GetArraySize(arr);
+    for (int i = 0; i < n; i++) {
+        cJSON* item = cJSON_GetArrayItem(arr, i);
+        cJSON* jname = cJSON_GetObjectItem(item, "name");
+        if (cJSON_IsString(jname) && std::string(jname->valuestring) == name) {
+            cJSON* jsongs = cJSON_GetObjectItem(item, "songs");
+            if (cJSON_IsArray(jsongs)) {
+                char* printed = cJSON_PrintUnformatted(jsongs);
+                if (printed) {
+                    result = printed;
+                    cJSON_free(printed);
+                }
+            }
+            break;
+        }
+    }
+    cJSON_Delete(arr);
+    return result;
+}
+
 McpServer::McpServer() {
 }
 
@@ -293,7 +328,7 @@ void McpServer::AddCommonTools() {
         "  - duration: 时长\n"
         "  **播放选项**:\n"
         "  1. 播放单首歌：使用 play_song 工具，同时传递 song_name 和 artist 参数\n"
-        "  2. 播放整个歌单：使用 play_playlist 工具，传递完整的歌曲JSON数组",
+        "  2. 播放整个歌单：直接调用 play_playlist_by_name 工具，playlist_name 传'我喜欢'即可。不要自己拼歌曲JSON数组！",
         PropertyList(),
         [](const PropertyList& properties) -> ReturnValue {
             TaskPriorityReset priority_reset(1);  // 避免同步HTTP阻塞音频任务
@@ -316,7 +351,7 @@ void McpServer::AddCommonTools() {
         "  - title: 歌曲名\n"
         "  - artist: 艺术家名\n"
         "  - duration: 时长\n"
-        "  **重要**: 播放歌单中的歌曲时，请同时传递 song_name 和 artist 参数给 play_song 工具。",
+        "  **重要**: 要播放某个歌单，直接调用 play_playlist_by_name 工具，只需传 playlist_name（如'Beyond'）即可，设备会自动读取并播放，不要自己拼歌曲JSON数组，也不要先调用本工具。",
         PropertyList(),
         [](const PropertyList& properties) -> ReturnValue {
             TaskPriorityReset priority_reset(1);  // 避免同步HTTP阻塞音频任务
@@ -483,6 +518,74 @@ void McpServer::AddCommonTools() {
             } else {
                 return "{\"success\": false, \"message\": \"Failed to start playlist\"}";
             }
+        });
+
+    // 按歌单名播放（语音推荐工具）：用户说"播放XX歌单""播放我的XX歌单""播放XX歌单里的歌"时，
+    // 直接传歌单名即可。设备自己读取歌单并播放，无需大模型拼大JSON，避免长文本阻塞导致卡死。
+    AddTool("self.music.play_playlist_by_name",
+        "按歌单名称播放整个歌单（连续播放该歌单里的所有歌）。\n"
+        "使用场景：用户说'播放我的歌单''播放XX歌单''播放XX歌单里的歌''放一下XX歌单'时，优先调用本工具。\n"
+        "如果你想不起歌单名，先调用 my_playlists 查看有哪些歌单，再调用本工具。\n"
+        "参数：\n"
+        "  `playlist_name`: 歌单名称，例如：Beyond、周杰伦、王杰、我喜欢\n"
+        "返回：开始播放歌单的状态。",
+        PropertyList({
+            Property("playlist_name", kPropertyTypeString)
+        }),
+        [music](const PropertyList &properties) -> ReturnValue
+        {
+            TaskPriorityReset priority_reset(1);  // 读取歌单HTTP + 启动播放，避免阻塞音频任务
+            auto& dm = DeviceManager::GetInstance();
+            if (!dm.IsDeviceBound()) {
+                return "{\"success\": false, \"message\": \"设备未绑定，请先绑定账号\"}";
+            }
+            auto pl_name = properties["playlist_name"].value<std::string>();
+            if (pl_name.empty()) {
+                return "{\"success\": false, \"message\": \"请告诉我歌单名称\"}";
+            }
+
+            // "我喜欢"走收藏接口，其余走自建歌单接口
+            std::string songs_json;
+            if (pl_name == "我喜欢" || pl_name == "我喜欢的" || pl_name == "收藏" || pl_name == "favorite") {
+                std::string fav = dm.GetFavorites();
+                if (!fav.empty()) {
+                    songs_json = fav;  // 收藏接口返回的就是歌曲数组
+                } else {
+                    songs_json = find_playlist_songs_json_by_name("我喜欢");
+                }
+            } else {
+                songs_json = find_playlist_songs_json_by_name(pl_name);
+            }
+            if (songs_json.empty()) {
+                return "{\"success\": false, \"message\": \"找不到歌单《" + pl_name + "》，请先说'我的歌单'查看列表\"}";
+            }
+
+            cJSON* json = cJSON_Parse(songs_json.c_str());
+            if (!json || !cJSON_IsArray(json)) {
+                if (json) cJSON_Delete(json);
+                return "{\"success\": false, \"message\": \"歌单数据格式错误\"}";
+            }
+            std::vector<SongInfo> playlist;
+            int array_size = cJSON_GetArraySize(json);
+            for (int i = 0; i < array_size; i++) {
+                cJSON* song_item = cJSON_GetArrayItem(json, i);
+                if (!song_item) continue;
+                cJSON* title = cJSON_GetObjectItem(song_item, "title");
+                cJSON* artist = cJSON_GetObjectItem(song_item, "artist");
+                if (cJSON_IsString(title) && cJSON_IsString(artist)) {
+                    playlist.emplace_back(title->valuestring, artist->valuestring);
+                }
+            }
+            cJSON_Delete(json);
+
+            if (playlist.empty()) {
+                return "{\"success\": false, \"message\": \"歌单《" + pl_name + "》是空的\"}";
+            }
+            if (music->PlayPlaylist(playlist)) {
+                return "{\"success\": true, \"message\": \"开始播放歌单《" + pl_name + "》，共 " +
+                       std::to_string(playlist.size()) + " 首歌\"}";
+            }
+            return "{\"success\": false, \"message\": \"播放歌单失败\"}";
         });
 
     // 播放队列控制工具
