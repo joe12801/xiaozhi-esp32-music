@@ -805,6 +805,9 @@ void Esp32Music::PlayAudioStream(int generation) {
                 ESP_LOGI(TAG, "Barge-in while music playing, stopping music (total_played=%d)", total_played);
                 is_playing_ = false;
                 is_downloading_ = false;
+                // 关键：语音打断时置位该标志，让歌单线程知道"这是被打断，不是播完"，
+                // 从而停止整个歌单而不是自动切下一首，把麦克风让给用户说话。
+                barge_in_stop_ = true;
                 auto display = Board::GetInstance().GetDisplay();
                 if (display) {
                     display->ClearMusicInfo();
@@ -1512,6 +1515,9 @@ bool Esp32Music::PlayPlaylist(const std::vector<SongInfo>& songs) {
     
     ESP_LOGI(TAG, "Starting playlist with %d songs", (int)songs.size());
     
+    // 重置打断标志，避免上一次打断的残留标志让新歌单刚起就停
+    barge_in_stop_ = false;
+    
     // 停止当前播放
     StopPlaylist();
     
@@ -1621,9 +1627,21 @@ void Esp32Music::PlaylistManagerThread() {
         
         PlayCurrentSong();
         
-        // 等待当前歌曲播放完成
+        // 等待当前歌曲播放完成（语音打断时提前退出等待）
         while (playlist_mode_.load() && (is_playing_.load() || is_downloading_.load())) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            if (barge_in_stop_.load()) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        }
+        
+        // 语音打断：停止整个歌单，绝不自动切下一首。
+        // 否则用户刚唤醒说话，下一首就盖过来，导致"打断不了、停一下又播下一首"。
+        if (barge_in_stop_.load()) {
+            ESP_LOGI(TAG, "Barge-in detected, stopping playlist (not playing next song)");
+            barge_in_stop_ = false;
+            playlist_mode_ = false;
+            break;
         }
         
         if (!playlist_mode_.load()) {

@@ -61,6 +61,7 @@ private:
     std::atomic<bool> is_playing_;
     std::atomic<bool> is_downloading_;
     std::atomic<int> play_generation_{0};  // 播放代次：切歌/停止时递增，让旧播放线程自行退出
+    std::atomic<bool> barge_in_stop_{false};  // 语音打断标志：置位后歌单线程停止自动切下一首
     std::thread play_thread_;
     std::thread download_thread_;
     int64_t current_play_time_ms_;  // 当前播放时间(毫秒)
