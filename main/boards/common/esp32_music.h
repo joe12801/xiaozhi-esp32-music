@@ -60,6 +60,7 @@ private:
     std::atomic<DisplayMode> display_mode_;
     std::atomic<bool> is_playing_;
     std::atomic<bool> is_downloading_;
+    std::atomic<int> play_generation_{0};  // 播放代次：切歌/停止时递增，让旧播放线程自行退出
     std::thread play_thread_;
     std::thread download_thread_;
     int64_t current_play_time_ms_;  // 当前播放时间(毫秒)
@@ -79,6 +80,7 @@ private:
     HMP3Decoder mp3_decoder_;
     MP3FrameInfo mp3_frame_info_;
     bool mp3_decoder_initialized_;
+    std::mutex mp3_decoder_mutex_;  // 保护解码器，避免新旧播放线程同时解码同一实例
     
     // 播放队列相关
     std::vector<SongInfo> playlist_;
@@ -89,7 +91,7 @@ private:
     
     // 私有方法
     void DownloadAudioStream(const std::string& music_url);
-    void PlayAudioStream();
+    void PlayAudioStream(int generation);
     void ClearAudioBuffer();
     bool InitializeMp3Decoder();
     void CleanupMp3Decoder();

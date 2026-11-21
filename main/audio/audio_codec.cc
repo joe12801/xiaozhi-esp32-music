@@ -129,7 +129,12 @@ bool AudioCodec::SetOutputSampleRate(int sample_rate) {
     };
     
     esp_err_t ret = i2s_channel_reconfig_std_clock(tx_handle_, &clk_cfg);
-    
+
+    // 时钟重配后 PLL/I2S 需要时间锁定。若在时钟未稳时立即输出数据，
+    // DAC 会输出乱数据，表现为切歌/从 TTS 切到音乐时的"沙沙"噪声。
+    // 这里在重新使能通道前等待时钟稳定。
+    vTaskDelay(pdMS_TO_TICKS(40));
+
     // 重新启用通道（无论之前是什么状态，现在都需要启用以便播放音频）
     esp_err_t enable_ret = i2s_channel_enable(tx_handle_);
     if (enable_ret != ESP_OK) {
@@ -137,6 +142,10 @@ bool AudioCodec::SetOutputSampleRate(int sample_rate) {
     } else {
         ESP_LOGI(TAG, "Enabled I2S TX channel");
     }
+
+    // 使能后再等待一小段时间，让 I2S/DMA 时钟彻底稳定，
+    // 避免时钟锁定瞬间的杂讯从喇叭输出（音乐第一首歌开头沙沙声）。
+    vTaskDelay(pdMS_TO_TICKS(40));
     
     if (ret == ESP_OK) {
         output_sample_rate_ = sample_rate;

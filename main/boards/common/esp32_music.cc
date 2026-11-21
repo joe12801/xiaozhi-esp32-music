@@ -462,6 +462,11 @@ bool Esp32Music::StartStreaming(const std::string& music_url) {
     }
     
     ESP_LOGD(TAG, "Starting streaming for URL: %s", music_url.c_str());
+
+    // 先递增代次，让任何仍在运行的旧播放线程立刻感知到过期并在循环顶部退出，
+    // 之后再去 join 它（否则旧线程看不到停止信号，join 会长时间阻塞）。
+    int my_generation = ++play_generation_;
+    ESP_LOGI(TAG, "Starting streaming generation %d", my_generation);
     
     // 停止之前的播放和下载
     is_downloading_ = false;
@@ -497,9 +502,9 @@ bool Esp32Music::StartStreaming(const std::string& music_url) {
     is_downloading_ = true;
     download_thread_ = std::thread(&Esp32Music::DownloadAudioStream, this, music_url);
     
-    // 开始播放线程（会等待缓冲区有足够数据）
+    // 开始播放线程（会等待缓冲区有足够数据），把自己的代次传进去
     is_playing_ = true;
-    play_thread_ = std::thread(&Esp32Music::PlayAudioStream, this);
+    play_thread_ = std::thread(&Esp32Music::PlayAudioStream, this, my_generation);
     
     ESP_LOGI(TAG, "Streaming threads started successfully");
     
@@ -520,6 +525,10 @@ bool Esp32Music::StopStreaming() {
         return true;
     }
     
+    // 递增代次，让正在运行的播放线程感知到自己已被停止并主动退出
+    ++play_generation_;
+    ESP_LOGI(TAG, "StopStreaming bumped generation to %d", play_generation_.load());
+
     // 停止下载和播放标志
     is_downloading_ = false;
     is_playing_ = false;
@@ -544,41 +553,25 @@ bool Esp32Music::StopStreaming() {
         ESP_LOGI(TAG, "Download thread joined in StopStreaming");
     }
     
-    // 等待播放线程结束，使用更安全的方式
+    // 等待播放线程结束。
+    // 旧实现用 joinable() 判断线程是否已结束是错的：线程函数返回后、未被 join 前
+    // joinable() 依然为 true，所以总会走到超时 detach，把仍在解码/写 I2S 的
+    // 线程变成无人看管的野线程 —— 这就是切歌后沙沙声的根源。
+    // 现在：代次已递增 + is_playing_=false + notify_all，播放线程会在循环顶部
+    // 检测到过期并自行退出；这里给足时间后直接 join。
     if (play_thread_.joinable()) {
-        // 先设置停止标志
         is_playing_ = false;
-        
-        // 通知条件变量，确保线程能够退出
         {
             std::lock_guard<std::mutex> lock(buffer_mutex_);
             buffer_cv_.notify_all();
         }
-        
-        // 使用超时机制等待线程结束，避免死锁
-        bool thread_finished = false;
-        int wait_count = 0;
-        const int max_wait = 100; // 最多等待1秒
-        
-        while (!thread_finished && wait_count < max_wait) {
+        // 给播放线程最多 3 秒收敛（解码一帧+I2S 写一般在几十毫秒内完成）
+        for (int i = 0; i < 300 && play_thread_.joinable(); ++i) {
             vTaskDelay(pdMS_TO_TICKS(10));
-            wait_count++;
-            
-            // 检查线程是否仍然可join
-            if (!play_thread_.joinable()) {
-                thread_finished = true;
-                break;
-            }
         }
-        
         if (play_thread_.joinable()) {
-            if (wait_count >= max_wait) {
-                ESP_LOGW(TAG, "Play thread join timeout, detaching thread");
-                play_thread_.detach();
-            } else {
-                play_thread_.join();
-                ESP_LOGI(TAG, "Play thread joined in StopStreaming");
-            }
+            play_thread_.join();
+            ESP_LOGI(TAG, "Play thread joined in StopStreaming");
         }
     }
     
@@ -725,8 +718,8 @@ void Esp32Music::DownloadAudioStream(const std::string& music_url) {
 }
 
 // 流式播放音频数据
-void Esp32Music::PlayAudioStream() {
-    ESP_LOGI(TAG, "Starting audio stream playback");
+void Esp32Music::PlayAudioStream(int generation) {
+    ESP_LOGI(TAG, "Starting audio stream playback (generation %d)", generation);
     
     // 初始化时间跟踪变量
     current_play_time_ms_ = 0;
@@ -734,10 +727,18 @@ void Esp32Music::PlayAudioStream() {
     total_frames_decoded_ = 0;
     
     auto codec = Board::GetInstance().GetAudioCodec();
-    if (!codec || !codec->output_enabled()) {
-        ESP_LOGE(TAG, "Audio codec not available or not enabled");
+    if (!codec) {
+        ESP_LOGE(TAG, "Audio codec not available");
         is_playing_ = false;
         return;
+    }
+    // 从 TTS 切到音乐播放时，output 可能还处于关闭状态（TTS 结束时关闭的）。
+    // 旧逻辑在这里直接 return，导致歌单第一首歌的播放线程启动即退出，
+    // 表现为"第一首歌沙沙/无声，过几分钟（下一首）才正常"。
+    // 修复：这里主动把输出使能打开，让播放线程正常工作。
+    if (!codec->output_enabled()) {
+        ESP_LOGI(TAG, "Audio codec output disabled, enabling for music playback");
+        codec->EnableOutput(true);
     }
     
     if (!mp3_decoder_initialized_) {
@@ -747,12 +748,17 @@ void Esp32Music::PlayAudioStream() {
     }
     
     
-    // 等待缓冲区有足够数据开始播放
+    // 等待缓冲区有足够数据开始播放（代次过期时也立即退出等待）
     {
         std::unique_lock<std::mutex> lock(buffer_mutex_);
-        buffer_cv_.wait(lock, [this] { 
-            return buffer_size_ >= MIN_BUFFER_SIZE || (!is_downloading_ && !audio_buffer_.empty()); 
+        buffer_cv_.wait(lock, [this, generation] {
+            return generation != play_generation_.load() ||
+                   buffer_size_ >= MIN_BUFFER_SIZE || (!is_downloading_ && !audio_buffer_.empty());
         });
+    }
+    if (generation != play_generation_.load()) {
+        ESP_LOGI(TAG, "Play thread generation %d stale after buffer wait, exiting", generation);
+        return;
     }
     
     ESP_LOGI(TAG, "云端由MeowEmbeddedMusicServer喵波音律嵌入式提供");
@@ -776,6 +782,16 @@ void Esp32Music::PlayAudioStream() {
     bool id3_processed = false;
     
     while (is_playing_) {
+        // 代次检查：若已有更新的播放线程接管，本线程立即退出。
+        // 这是"第一首歌沙沙声"的根治点：旧线程被 detach 后仍持有 is_playing_，
+        // 若不检查代次，它会和新线程同时解码同一个 mp3_decoder_ 并写 I2S，
+        // 导致解码错乱（-2）、输出杂讯，直到旧线程自然耗尽退出才恢复。
+        if (generation != play_generation_.load()) {
+            ESP_LOGI(TAG, "Play thread generation %d is stale (current %d), exiting",
+                     generation, play_generation_.load());
+            break;
+        }
+
         // 检查设备状态，只有在空闲状态才播放音乐
         auto& app = Application::GetInstance();
         DeviceState current_state = app.GetDeviceState();
@@ -848,8 +864,14 @@ void Esp32Music::PlayAudioStream() {
                         ESP_LOGI(TAG, "Playback finished, total played: %d bytes", total_played);
                         break;
                     }
-                    // 等待新数据
-                    buffer_cv_.wait(lock, [this] { return !audio_buffer_.empty() || !is_downloading_; });
+                    // 等待新数据（代次过期时也立即醒来退出）
+                    buffer_cv_.wait(lock, [this, generation] {
+                        return generation != play_generation_.load() ||
+                               !audio_buffer_.empty() || !is_downloading_;
+                    });
+                    if (generation != play_generation_.load()) {
+                        break;
+                    }
                     if (audio_buffer_.empty()) {
                         continue;
                     }
@@ -909,13 +931,20 @@ void Esp32Music::PlayAudioStream() {
             bytes_left -= sync_offset;
         }
         
-        // 解码MP3帧
+        // 解码MP3帧：解码器内部有状态，必须加锁串行化，
+        // 否则新旧线程并发调用会产生错误帧（-2）和杂讯。
         int16_t pcm_buffer[2304];
-        int decode_result = MP3Decode(mp3_decoder_, &read_ptr, &bytes_left, pcm_buffer, 0);
+        int decode_result;
+        {
+            std::lock_guard<std::mutex> lock(mp3_decoder_mutex_);
+            decode_result = MP3Decode(mp3_decoder_, &read_ptr, &bytes_left, pcm_buffer, 0);
+            if (decode_result == 0) {
+                MP3GetLastFrameInfo(mp3_decoder_, &mp3_frame_info_);
+            }
+        }
         
         if (decode_result == 0) {
-            // 解码成功，获取帧信息
-            MP3GetLastFrameInfo(mp3_decoder_, &mp3_frame_info_);
+            // 解码成功
             total_frames_decoded_++;
             
             // 基本的帧信息有效性检查，防止除零错误
