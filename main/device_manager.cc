@@ -9,6 +9,25 @@
 
 #define TAG "DeviceManager"
 
+// 本文件内的 URL 编码（与 esp32_music.cc 的 url_encode 行为一致）
+static std::string esp32_url_encode(const std::string& str) {
+    std::string encoded;
+    char hex[4];
+    for (size_t i = 0; i < str.length(); i++) {
+        unsigned char c = str[i];
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+            (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == '~') {
+            encoded += c;
+        } else if (c == ' ') {
+            encoded += '+';
+        } else {
+            snprintf(hex, sizeof(hex), "%%%02X", c);
+            encoded += hex;
+        }
+    }
+    return encoded;
+}
+
 DeviceManager& DeviceManager::GetInstance() {
     static DeviceManager instance;
     return instance;
@@ -354,6 +373,135 @@ std::string DeviceManager::GetUserPlaylists() {
         ESP_LOGW(TAG, "GetUserPlaylists failed with status: %d", status_code);
         return "";
     }
+}
+
+std::string DeviceManager::CreateUserPlaylist(const std::string& name, const std::string& description) {
+    if (device_token_.empty() || name.empty()) {
+        return "";
+    }
+
+    auto& board = Board::GetInstance();
+    auto network = board.GetNetwork();
+    auto http = network->CreateHttp(0);
+
+    // 构造请求体 {"name": "...", "description": "..."}
+    cJSON* req = cJSON_CreateObject();
+    cJSON_AddStringToObject(req, "name", name.c_str());
+    cJSON_AddStringToObject(req, "description", description.c_str());
+    char* body = cJSON_PrintUnformatted(req);
+    cJSON_Delete(req);
+    if (!body) {
+        return "";
+    }
+    std::string request_body(body);
+    cJSON_free(body);
+
+    http->SetHeader("X-Device-Token", device_token_.c_str());
+    http->SetHeader("User-Agent", "ESP32-Music-Player/1.0");
+    http->SetHeader("Content-Type", "application/json");
+
+    if (!http->Open("POST", PLAYLIST_CREATE_API_URL)) {
+        ESP_LOGE(TAG, "CreateUserPlaylist: failed to connect");
+        http->Close();
+        return "";
+    }
+    http->Write(request_body.c_str(), request_body.length());
+
+    int status = http->GetStatusCode();
+    std::string response = http->ReadAll();
+    http->Close();
+
+    if (status == 200 || status == 201) {
+        ESP_LOGI(TAG, "CreateUserPlaylist: created '%s'", name.c_str());
+        return response;
+    }
+    ESP_LOGW(TAG, "CreateUserPlaylist failed status=%d resp=%s", status, response.c_str());
+    return "";
+}
+
+bool DeviceManager::AddSongToUserPlaylist(const std::string& playlist_id,
+                                          const std::string& title,
+                                          const std::string& artist) {
+    if (device_token_.empty() || playlist_id.empty() || title.empty()) {
+        return false;
+    }
+
+    auto& board = Board::GetInstance();
+    auto network = board.GetNetwork();
+    auto http = network->CreateHttp(0);
+
+    // 构造 MusicItem 请求体。url 用 /stream_live 现场构造，服务端原样存储，
+    // 播放时走已验证的多源链路（与搜索/播放一致）。
+    std::string base_url = MUSIC_SERVER_URL;
+    std::string play_url = base_url + "/stream_live?song=" +
+                           esp32_url_encode(title) + "&singer=" + esp32_url_encode(artist);
+    cJSON* req = cJSON_CreateObject();
+    cJSON_AddStringToObject(req, "title", title.c_str());
+    cJSON_AddStringToObject(req, "artist", artist.c_str());
+    cJSON_AddStringToObject(req, "audio_url", play_url.c_str());
+    cJSON_AddStringToObject(req, "audio_full_url", play_url.c_str());
+    char* body = cJSON_PrintUnformatted(req);
+    cJSON_Delete(req);
+    if (!body) {
+        return false;
+    }
+    std::string request_body(body);
+    cJSON_free(body);
+
+    std::string url = std::string(PLAYLIST_ADD_SONG_API_URL) + "?playlist_id=" + esp32_url_encode(playlist_id);
+
+    http->SetHeader("X-Device-Token", device_token_.c_str());
+    http->SetHeader("User-Agent", "ESP32-Music-Player/1.0");
+    http->SetHeader("Content-Type", "application/json");
+
+    if (!http->Open("POST", url)) {
+        ESP_LOGE(TAG, "AddSongToPlaylist: failed to connect");
+        http->Close();
+        return false;
+    }
+    http->Write(request_body.c_str(), request_body.length());
+
+    int status = http->GetStatusCode();
+    std::string response = http->ReadAll();
+    http->Close();
+
+    if (status == 200) {
+        ESP_LOGI(TAG, "AddSongToPlaylist: added '%s' - '%s'", title.c_str(), artist.c_str());
+        return true;
+    }
+    ESP_LOGW(TAG, "AddSongToPlaylist failed status=%d resp=%s", status, response.c_str());
+    return false;
+}
+
+bool DeviceManager::DeleteUserPlaylist(const std::string& playlist_id) {
+    if (device_token_.empty() || playlist_id.empty()) {
+        return false;
+    }
+
+    auto& board = Board::GetInstance();
+    auto network = board.GetNetwork();
+    auto http = network->CreateHttp(0);
+
+    std::string url = std::string(PLAYLIST_DELETE_API_URL) + "?playlist_id=" + esp32_url_encode(playlist_id);
+
+    http->SetHeader("X-Device-Token", device_token_.c_str());
+    http->SetHeader("User-Agent", "ESP32-Music-Player/1.0");
+
+    if (!http->Open("DELETE", url)) {
+        ESP_LOGE(TAG, "DeleteUserPlaylist: failed to connect");
+        http->Close();
+        return false;
+    }
+    int status = http->GetStatusCode();
+    std::string response = http->ReadAll();
+    http->Close();
+
+    if (status == 200) {
+        ESP_LOGI(TAG, "DeleteUserPlaylist: deleted '%s'", playlist_id.c_str());
+        return true;
+    }
+    ESP_LOGW(TAG, "DeleteUserPlaylist failed status=%d resp=%s", status, response.c_str());
+    return false;
 }
 
 bool DeviceManager::IsDeviceBound() {

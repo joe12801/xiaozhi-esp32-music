@@ -28,6 +28,16 @@ public:
     // 歌单相关
     std::string GetFavorites();
     std::string GetUserPlaylists();
+
+    // 歌单写操作（设备token鉴权）
+    // 创建歌单，成功返回歌单JSON（含 id），失败返回空字符串
+    std::string CreateUserPlaylist(const std::string& name, const std::string& description);
+    // 往指定歌单加歌，成功返回 true
+    bool AddSongToUserPlaylist(const std::string& playlist_id,
+                               const std::string& title,
+                               const std::string& artist);
+    // 删除歌单，成功返回 true
+    bool DeleteUserPlaylist(const std::string& playlist_id);
     
     // 检查设备是否已绑定
     bool IsDeviceBound();

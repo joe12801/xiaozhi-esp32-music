@@ -35,5 +35,8 @@
 #define FAVORITE_LIST_API_URL MUSIC_SERVER_URL "/api/favorite/list"
 #define PLAYLIST_LIST_API_URL MUSIC_SERVER_URL "/api/user/playlists"
 #define PLAYLIST_DETAIL_API_URL MUSIC_SERVER_URL "/api/user/playlists" // 详情可能需要带ID参数
+#define PLAYLIST_CREATE_API_URL MUSIC_SERVER_URL "/api/user/playlists/create"
+#define PLAYLIST_ADD_SONG_API_URL MUSIC_SERVER_URL "/api/user/playlists/add-song"
+#define PLAYLIST_DELETE_API_URL MUSIC_SERVER_URL "/api/user/playlists/delete"
 
 #endif // SERVER_CONFIG_H

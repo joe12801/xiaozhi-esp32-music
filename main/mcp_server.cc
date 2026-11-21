@@ -21,6 +21,35 @@
 #include "device_manager.h"
 #define TAG "MCP"
 
+// 按歌单名在用户的歌单列表中查找 id；找不到返回空字符串。
+// 让语音交互里用户说歌单名（而非 id）也能加歌/删歌。
+static std::string find_playlist_id_by_name(const std::string& name) {
+    auto& dm = DeviceManager::GetInstance();
+    std::string list_json = dm.GetUserPlaylists();
+    if (list_json.empty()) {
+        return "";
+    }
+    cJSON* arr = cJSON_Parse(list_json.c_str());
+    if (!arr || !cJSON_IsArray(arr)) {
+        if (arr) cJSON_Delete(arr);
+        return "";
+    }
+    std::string id;
+    int n = cJSON_GetArraySize(arr);
+    for (int i = 0; i < n; i++) {
+        cJSON* item = cJSON_GetArrayItem(arr, i);
+        cJSON* jname = cJSON_GetObjectItem(item, "name");
+        cJSON* jid = cJSON_GetObjectItem(item, "id");
+        if (cJSON_IsString(jname) && cJSON_IsString(jid) &&
+            std::string(jname->valuestring) == name) {
+            id = jid->valuestring;
+            break;
+        }
+    }
+    cJSON_Delete(arr);
+    return id;
+}
+
 McpServer::McpServer() {
 }
 
@@ -294,6 +323,104 @@ void McpServer::AddCommonTools() {
                 return "获取歌单失败或没有歌单";
             }
             return result;
+        });
+
+    // 创建新歌单
+    AddTool("self.music.create_playlist",
+        "创建一个新的歌单。用户说'创建歌单''新建歌单''建一个叫XX的歌单'时调用本工具。\n"
+        "参数：\n"
+        "  `name`: 歌单名称，例如：通勤路上的歌\n"
+        "  `description`: 歌单简介，可留空\n"
+        "返回：新歌单信息（含 id）。请记住返回的 id 与 name，后续加歌时要用。",
+        PropertyList({
+            Property("name", kPropertyTypeString),
+            Property("description", kPropertyTypeString, "")
+        }),
+        [](const PropertyList& properties) -> ReturnValue {
+            auto& dm = DeviceManager::GetInstance();
+            if (!dm.IsDeviceBound()) {
+                return "{\"success\": false, \"message\": \"设备未绑定，请先绑定账号\"}";
+            }
+            auto name = properties["name"].value<std::string>();
+            auto desc = properties["description"].value<std::string>();
+            if (name.empty()) {
+                return "{\"success\": false, \"message\": \"歌单名不能为空\"}";
+            }
+            std::string result = dm.CreateUserPlaylist(name, desc);
+            if (result.empty()) {
+                return "{\"success\": false, \"message\": \"创建歌单失败，请稍后重试\"}";
+            }
+            return "{\"success\": true, \"message\": \"歌单创建成功\", \"playlist\": " + result + "}";
+        });
+
+    // 往歌单加歌
+    AddTool("self.music.add_song_to_playlist",
+        "把歌曲加入指定歌单。用户说'把这首歌加到XX歌单''往XX歌单加一首晴天'时调用本工具。\n"
+        "参数：\n"
+        "  `song_name`: 歌名，例如：晴天\n"
+        "  `playlist_name`: 歌单名称，例如：通勤路上的歌（优先用歌单名；也可用 playlist_id 传 id）\n"
+        "  `artist`: 歌手名，可选，建议提供以避免加错版本\n"
+        "  `playlist_id`: 歌单ID，可选（若已提供 playlist_name 可留空）\n"
+        "返回：是否添加成功。",
+        PropertyList({
+            Property("song_name", kPropertyTypeString),
+            Property("playlist_name", kPropertyTypeString, ""),
+            Property("artist", kPropertyTypeString, ""),
+            Property("playlist_id", kPropertyTypeString, "")
+        }),
+        [](const PropertyList& properties) -> ReturnValue {
+            auto& dm = DeviceManager::GetInstance();
+            if (!dm.IsDeviceBound()) {
+                return "{\"success\": false, \"message\": \"设备未绑定，请先绑定账号\"}";
+            }
+            auto song = properties["song_name"].value<std::string>();
+            auto artist = properties["artist"].value<std::string>();
+            auto pl_name = properties["playlist_name"].value<std::string>();
+            auto pl_id = properties["playlist_id"].value<std::string>();
+            if (song.empty()) {
+                return "{\"success\": false, \"message\": \"歌名不能为空\"}";
+            }
+            // 优先用显式 id；否则按名字查
+            if (pl_id.empty() && !pl_name.empty()) {
+                pl_id = find_playlist_id_by_name(pl_name);
+            }
+            if (pl_id.empty()) {
+                return "{\"success\": false, \"message\": \"找不到该歌单，请先用 my_playlists 查看歌单列表\"}";
+            }
+            if (dm.AddSongToUserPlaylist(pl_id, song, artist)) {
+                return "{\"success\": true, \"message\": \"已把《" + song + "》加入歌单\"}";
+            }
+            return "{\"success\": false, \"message\": \"加歌失败（可能歌曲已在歌单中或服务异常）\"}";
+        });
+
+    // 删除歌单
+    AddTool("self.music.delete_playlist",
+        "删除一个歌单。用户说'删除歌单XX''把XX歌单删掉'时调用本工具。\n"
+        "参数：\n"
+        "  `playlist_name`: 歌单名称（优先）；也可用 playlist_id 传 id\n"
+        "  `playlist_id`: 歌单ID，可选\n"
+        "返回：是否删除成功。",
+        PropertyList({
+            Property("playlist_name", kPropertyTypeString, ""),
+            Property("playlist_id", kPropertyTypeString, "")
+        }),
+        [](const PropertyList& properties) -> ReturnValue {
+            auto& dm = DeviceManager::GetInstance();
+            if (!dm.IsDeviceBound()) {
+                return "{\"success\": false, \"message\": \"设备未绑定，请先绑定账号\"}";
+            }
+            auto pl_name = properties["playlist_name"].value<std::string>();
+            auto pl_id = properties["playlist_id"].value<std::string>();
+            if (pl_id.empty() && !pl_name.empty()) {
+                pl_id = find_playlist_id_by_name(pl_name);
+            }
+            if (pl_id.empty()) {
+                return "{\"success\": false, \"message\": \"找不到该歌单，请先用 my_playlists 查看歌单列表\"}";
+            }
+            if (dm.DeleteUserPlaylist(pl_id)) {
+                return "{\"success\": true, \"message\": \"歌单已删除\"}";
+            }
+            return "{\"success\": false, \"message\": \"删除歌单失败\"}";
         });
 
     // 播放整个歌单工具
