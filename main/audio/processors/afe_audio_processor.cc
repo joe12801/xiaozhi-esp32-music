@@ -71,7 +71,7 @@ void AfeAudioProcessor::Initialize(AudioCodec* codec, int frame_duration_ms, srm
         auto this_ = (AfeAudioProcessor*)arg;
         this_->AudioProcessorTask();
         vTaskDelete(NULL);
-    }, "audio_communication", 4096, this, 3, NULL);
+    }, "audio_communication", 4096, this, 5, NULL);  // 提高优先级,避免播放/网络任务饿死AFE导致ringbuffer满
 }
 
 AfeAudioProcessor::~AfeAudioProcessor() {

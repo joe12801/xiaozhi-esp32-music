@@ -164,6 +164,9 @@ void McpServer::AddCommonTools() {
                 }),
                 [music](const PropertyList &properties) -> ReturnValue
                 {
+                    // 降低优先级执行网络/下载操作，避免阻塞音频上传任务
+                    // （主线程长时间阻塞会导致 AFE ringbuffer 满、小智卡死无响应）
+                    TaskPriorityReset priority_reset(1);
                     auto song_name = properties["song_name"].value<std::string>();
                     auto artist = properties["artist"].value<std::string>();
                     
@@ -196,6 +199,7 @@ void McpServer::AddCommonTools() {
             Property("device_name", kPropertyTypeString, "")
         }),
         [](const PropertyList& properties) -> ReturnValue {
+            TaskPriorityReset priority_reset(1);  // 避免同步HTTP阻塞音频任务
             auto& device_manager = DeviceManager::GetInstance();
             
             std::string binding_code = properties["binding_code"].value<std::string>();
@@ -236,6 +240,7 @@ void McpServer::AddCommonTools() {
         "  Success or error message.",
         PropertyList(),
         [](const PropertyList& properties) -> ReturnValue {
+            TaskPriorityReset priority_reset(1);  // 避免同步HTTP阻塞音频任务
             auto& device_manager = DeviceManager::GetInstance();
             
             if (!device_manager.IsDeviceBound()) {
@@ -291,6 +296,7 @@ void McpServer::AddCommonTools() {
         "  2. 播放整个歌单：使用 play_playlist 工具，传递完整的歌曲JSON数组",
         PropertyList(),
         [](const PropertyList& properties) -> ReturnValue {
+            TaskPriorityReset priority_reset(1);  // 避免同步HTTP阻塞音频任务
             auto& device_manager = DeviceManager::GetInstance();
             if (!device_manager.IsDeviceBound()) {
                 return "错误：设备未绑定，请先绑定账号";
@@ -313,6 +319,7 @@ void McpServer::AddCommonTools() {
         "  **重要**: 播放歌单中的歌曲时，请同时传递 song_name 和 artist 参数给 play_song 工具。",
         PropertyList(),
         [](const PropertyList& properties) -> ReturnValue {
+            TaskPriorityReset priority_reset(1);  // 避免同步HTTP阻塞音频任务
             auto& device_manager = DeviceManager::GetInstance();
             if (!device_manager.IsDeviceBound()) {
                 return "错误：设备未绑定，请先绑定账号";
@@ -337,6 +344,7 @@ void McpServer::AddCommonTools() {
             Property("description", kPropertyTypeString, "")
         }),
         [](const PropertyList& properties) -> ReturnValue {
+            TaskPriorityReset priority_reset(1);  // 避免同步HTTP阻塞音频任务
             auto& dm = DeviceManager::GetInstance();
             if (!dm.IsDeviceBound()) {
                 return "{\"success\": false, \"message\": \"设备未绑定，请先绑定账号\"}";
@@ -369,6 +377,7 @@ void McpServer::AddCommonTools() {
             Property("playlist_id", kPropertyTypeString, "")
         }),
         [](const PropertyList& properties) -> ReturnValue {
+            TaskPriorityReset priority_reset(1);  // 避免同步HTTP阻塞音频任务
             auto& dm = DeviceManager::GetInstance();
             if (!dm.IsDeviceBound()) {
                 return "{\"success\": false, \"message\": \"设备未绑定，请先绑定账号\"}";
@@ -405,6 +414,7 @@ void McpServer::AddCommonTools() {
             Property("playlist_id", kPropertyTypeString, "")
         }),
         [](const PropertyList& properties) -> ReturnValue {
+            TaskPriorityReset priority_reset(1);  // 避免同步HTTP阻塞音频任务
             auto& dm = DeviceManager::GetInstance();
             if (!dm.IsDeviceBound()) {
                 return "{\"success\": false, \"message\": \"设备未绑定，请先绑定账号\"}";
@@ -435,6 +445,7 @@ void McpServer::AddCommonTools() {
         }),
         [music](const PropertyList &properties) -> ReturnValue
         {
+            TaskPriorityReset priority_reset(1);  // 避免启动播放时阻塞音频任务
             auto songs_json = properties["songs"].value<std::string>();
             
             // 解析歌曲JSON数组
