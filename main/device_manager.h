@@ -26,10 +26,12 @@ public:
     bool VerifyDevice();
     
     // 歌单相关
-    std::string GetFavorites();
+    // offset >= 0 时按分页请求（服务端返回 {"total":N,"songs":[...]}），
+    // offset < 0 表示不分页（老行为，一次性拿全量）。
+    std::string GetFavorites(int offset = -1, int limit = 0);
     std::string GetUserPlaylists();
-    // 按歌单名取精简歌曲列表（只含 title/artist，约1KB，避免拉全量30KB大JSON卡死音频任务）
-    std::string GetPlaylistSongs(const std::string& name);
+    // 按歌单名取精简歌曲列表（只含 title/artist，避免拉全量30KB大JSON卡死音频任务）
+    std::string GetPlaylistSongs(const std::string& name, int offset = -1, int limit = 0);
 
     // 歌单写操作（设备token鉴权）
     // 创建歌单，成功返回歌单JSON（含 id），失败返回空字符串

@@ -1,4 +1,5 @@
 #include "device_manager.h"
+#include <string>
 #include <esp_log.h>
 #include <esp_mac.h>
 #include <nvs_flash.h>
@@ -313,7 +314,7 @@ bool DeviceManager::VerifyDevice() {
     }
 }
 
-std::string DeviceManager::GetFavorites() {
+std::string DeviceManager::GetFavorites(int offset, int limit) {
     if (device_token_.empty()) {
         return "";
     }
@@ -323,6 +324,9 @@ std::string DeviceManager::GetFavorites() {
     auto http = network->CreateHttp(0);
     
     std::string url = FAVORITE_LIST_API_URL;
+    if (offset >= 0) {
+        url += "?offset=" + std::to_string(offset) + "&limit=" + std::to_string(limit > 0 ? limit : 50);
+    }
     
     http->SetHeader("X-Device-Token", device_token_.c_str());
     http->SetHeader("User-Agent", "ESP32-Music-Player/1.0");
@@ -375,7 +379,7 @@ std::string DeviceManager::GetUserPlaylists() {
     }
 }
 
-std::string DeviceManager::GetPlaylistSongs(const std::string& name) {
+std::string DeviceManager::GetPlaylistSongs(const std::string& name, int offset, int limit) {
     if (device_token_.empty() || name.empty()) {
         return "";
     }
@@ -387,6 +391,11 @@ std::string DeviceManager::GetPlaylistSongs(const std::string& name) {
     // 用 GET query 传歌单名（中文用 esp32_url_encode 编码），避免 POST body
     // 在该 HttpClient 上走 chunked 导致服务端读不到 name、设备等响应头超时30秒。
     std::string url = std::string(PLAYLIST_SONGS_API_URL) + "?name=" + esp32_url_encode(name);
+    // 分页：指定 offset 时服务端返回 {"total":N,"songs":[...]}，逐页拉可以
+    // 避免一次性把整包大 JSON 解析进内存（198 首时解析失败导致整个歌单不播）。
+    if (offset >= 0) {
+        url += "&offset=" + std::to_string(offset) + "&limit=" + std::to_string(limit > 0 ? limit : 50);
+    }
 
     http->SetHeader("X-Device-Token", device_token_.c_str());
     http->SetHeader("User-Agent", "ESP32-Music-Player/1.0");

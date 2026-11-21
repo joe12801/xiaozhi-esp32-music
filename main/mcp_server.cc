@@ -9,6 +9,8 @@
 #include <algorithm>
 #include <cstring>
 #include <esp_pthread.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #include "application.h"
 #include "display.h"
@@ -92,6 +94,87 @@ static std::string find_playlist_songs_json_by_name(const std::string& name) {
     }
     cJSON_Delete(arr);
     return result;
+}
+
+// ========== 歌单分页拉取 ==========
+// 单页条数：50 首的精简 JSON 约 2.3KB，解析峰值远低于一次性 198 首（约 9KB）。
+static constexpr int kPlaylistPageSize = 50;
+
+// 把一页响应追加解析到 out。兼容两种格式：
+//   {"total":N,"songs":[{title,artist},...]}  —— 新服务端分页
+//   [{title,artist},...]                      —— 老服务端一次性全量
+// 返回本页新增条数（<0 表示解析失败）；*total 返回服务端声明的总条数，-1 表示未知。
+static int append_playlist_page(const std::string& payload, std::vector<SongInfo>& out, int* total) {
+    if (total) *total = -1;
+    cJSON* root = cJSON_Parse(payload.c_str());
+    if (!root) {
+        return -1;
+    }
+    cJSON* songs = root;
+    if (cJSON_IsObject(root)) {
+        cJSON* jtotal = cJSON_GetObjectItem(root, "total");
+        if (total && cJSON_IsNumber(jtotal)) {
+            *total = jtotal->valueint;
+        }
+        songs = cJSON_GetObjectItem(root, "songs");
+    }
+    if (!cJSON_IsArray(songs)) {
+        cJSON_Delete(root);
+        return -1;
+    }
+    int added = 0;
+    int n = cJSON_GetArraySize(songs);
+    for (int i = 0; i < n; i++) {
+        cJSON* item = cJSON_GetArrayItem(songs, i);
+        if (!item) continue;
+        cJSON* title = cJSON_GetObjectItem(item, "title");
+        cJSON* artist = cJSON_GetObjectItem(item, "artist");
+        if (cJSON_IsString(title) && cJSON_IsString(artist)) {
+            out.emplace_back(title->valuestring, artist->valuestring);
+            added++;
+        }
+    }
+    cJSON_Delete(root);
+    return added;
+}
+
+// 分页拉取整个歌单：每页 50 首，解析完立即释放该页文本与 cJSON 节点，再拉下一页。
+// 这样内存峰值只有"一页"大小，200/500 首的歌单都能稳定拉全。
+// 原来是「一次性拉整包」——198 首时解析失败，表现为歌单拉到了却一个音频请求都不发。
+static bool load_playlist_songs(const std::string& name, bool is_favorite, std::vector<SongInfo>& out) {
+    auto& dm = DeviceManager::GetInstance();
+    out.clear();
+
+    int offset = 0;
+    int page = 0;
+    while (true) {
+        // payload 在循环体内声明，每轮结束即析构，不会累积占用
+        std::string payload = is_favorite
+            ? dm.GetFavorites(offset, kPlaylistPageSize)
+            : dm.GetPlaylistSongs(name, offset, kPlaylistPageSize);
+        if (payload.empty()) {
+            ESP_LOGW(TAG, "load_playlist_songs('%s'): page %d offset=%d empty", name.c_str(), page, offset);
+            return offset == 0 ? false : !out.empty();
+        }
+
+        int total = -1;
+        int added = append_playlist_page(payload, out, &total);
+        if (added < 0) {
+            ESP_LOGW(TAG, "load_playlist_songs('%s'): page %d parse failed", name.c_str(), page);
+            return offset == 0 ? false : !out.empty();
+        }
+
+        offset += added;
+        page++;
+        ESP_LOGI(TAG, "load_playlist_songs('%s'): page %d +%d, have %d/%d",
+                 name.c_str(), page, added, (int)out.size(), total);
+
+        if (total < 0) break;           // 老服务端：这一页就是全量
+        if (added == 0) break;          // 空页，防死循环
+        if (offset >= total) break;     // 已拉完
+        vTaskDelay(pdMS_TO_TICKS(30));  // 让出 CPU，避免连续 HTTP 饿死音频任务
+    }
+    return !out.empty();
 }
 
 // 把"全部歌单+每首歌详情"的大JSON瘦身成"只有歌单名+歌曲数"的小JSON。
@@ -579,44 +662,24 @@ void McpServer::AddCommonTools() {
                 return "{\"success\": false, \"message\": \"请告诉我歌单名称\"}";
             }
 
-            // "我喜欢"走收藏接口，其余走自建歌单接口
-            std::string songs_json;
-            if (pl_name == "我喜欢" || pl_name == "我喜欢的" || pl_name == "收藏" || pl_name == "favorite") {
-                std::string fav = dm.GetFavorites();
-                if (!fav.empty()) {
-                    songs_json = fav;  // 收藏接口返回的就是歌曲数组
-                } else {
-                    songs_json = find_playlist_songs_json_by_name("我喜欢");
+            // "我喜欢"走收藏接口，其余走自建歌单接口；两者都按 50 首分页拉全
+            const bool is_fav = (pl_name == "我喜欢" || pl_name == "我喜欢的" ||
+                                 pl_name == "收藏" || pl_name == "favorite");
+            std::vector<SongInfo> playlist;
+            bool loaded = load_playlist_songs(pl_name, is_fav, playlist);
+            if (!loaded) {
+                // 兜底：服务端还没有精简/分页接口时，用全量歌单 JSON 本地筛
+                std::string songs_json = find_playlist_songs_json_by_name(pl_name);
+                if (!songs_json.empty()) {
+                    int total = -1;
+                    append_playlist_page(songs_json, playlist, &total);
                 }
-            } else {
-                songs_json = find_playlist_songs_json_by_name(pl_name);
             }
-            if (songs_json.empty()) {
+            if (playlist.empty()) {
                 return "{\"success\": false, \"message\": \"找不到歌单《" + pl_name + "》，请先说'我的歌单'查看列表\"}";
             }
-
-            cJSON* json = cJSON_Parse(songs_json.c_str());
-            if (!json || !cJSON_IsArray(json)) {
-                if (json) cJSON_Delete(json);
-                return "{\"success\": false, \"message\": \"歌单数据格式错误\"}";
-            }
-            std::vector<SongInfo> playlist;
-            int array_size = cJSON_GetArraySize(json);
-            for (int i = 0; i < array_size; i++) {
-                cJSON* song_item = cJSON_GetArrayItem(json, i);
-                if (!song_item) continue;
-                cJSON* title = cJSON_GetObjectItem(song_item, "title");
-                cJSON* artist = cJSON_GetObjectItem(song_item, "artist");
-                if (cJSON_IsString(title) && cJSON_IsString(artist)) {
-                    playlist.emplace_back(title->valuestring, artist->valuestring);
-                }
-            }
-            cJSON_Delete(json);
-
-            if (playlist.empty()) {
-                return "{\"success\": false, \"message\": \"歌单《" + pl_name + "》是空的\"}";
-            }
             if (music->PlayPlaylist(playlist)) {
+                ESP_LOGI(TAG, "Play playlist '%s': %d songs", pl_name.c_str(), (int)playlist.size());
                 return "{\"success\": true, \"message\": \"开始播放歌单《" + pl_name + "》，共 " +
                        std::to_string(playlist.size()) + " 首歌\"}";
             }
