@@ -20,3 +20,7 @@ mmap_generate_*.h
 # 本地打包工具（ESP-IDF 自带 esptool，无需提交）
 combine.exe
 esptool.exe
+
+# 串口调试日志（可能含 MAC / token 片段，禁止提交）
+serial_*.txt
+/tmp/
