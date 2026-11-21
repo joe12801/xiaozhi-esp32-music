@@ -55,6 +55,15 @@ static std::string find_playlist_id_by_name(const std::string& name) {
 // 找到返回 songs 数组的 JSON；找不到返回空字符串。调用方负责解析。
 static std::string find_playlist_songs_json_by_name(const std::string& name) {
     auto& dm = DeviceManager::GetInstance();
+
+    // 优先走服务端精简接口：只返回该歌单的 [{title,artist}]（约1KB），
+    // 避免拉全部歌单60首歌的30KB大JSON——那会在ESP32同步解析时饿死音频任务导致卡死。
+    std::string slim = dm.GetPlaylistSongs(name);
+    if (!slim.empty()) {
+        return slim;  // 直接就是精简歌曲数组，正是工具需要的格式
+    }
+
+    // 回退：老服务端没有精简接口时，仍用全量歌单本地筛选
     std::string list_json = dm.GetUserPlaylists();
     if (list_json.empty()) {
         return "";
@@ -82,6 +91,35 @@ static std::string find_playlist_songs_json_by_name(const std::string& name) {
         }
     }
     cJSON_Delete(arr);
+    return result;
+}
+
+// 把"全部歌单+每首歌详情"的大JSON瘦身成"只有歌单名+歌曲数"的小JSON。
+// 用于 my_playlists（只查看歌单名时），避免把60首歌的详情灌进大模型导致卡死。
+static std::string slim_playlist_names_json(const std::string& list_json) {
+    cJSON* arr = cJSON_Parse(list_json.c_str());
+    if (!arr || !cJSON_IsArray(arr)) {
+        if (arr) cJSON_Delete(arr);
+        return "[]";
+    }
+    cJSON* out = cJSON_CreateArray();
+    int n = cJSON_GetArraySize(arr);
+    for (int i = 0; i < n; i++) {
+        cJSON* item = cJSON_GetArrayItem(arr, i);
+        cJSON* jname = cJSON_GetObjectItem(item, "name");
+        if (!cJSON_IsString(jname)) continue;
+        cJSON* obj = cJSON_CreateObject();
+        cJSON_AddStringToObject(obj, "name", jname->valuestring);
+        cJSON* jsongs = cJSON_GetObjectItem(item, "songs");
+        int count = cJSON_IsArray(jsongs) ? cJSON_GetArraySize(jsongs) : 0;
+        cJSON_AddNumberToObject(obj, "song_count", count);
+        cJSON_AddItemToArray(out, obj);
+    }
+    cJSON_Delete(arr);
+    char* printed = cJSON_PrintUnformatted(out);
+    std::string result = printed ? printed : "[]";
+    if (printed) cJSON_free(printed);
+    cJSON_Delete(out);
     return result;
 }
 
@@ -345,13 +383,9 @@ void McpServer::AddCommonTools() {
         });
 
     AddTool("self.music.my_playlists",
-        "获取我创建的歌单列表。\n"
-        "Returns:\n"
-        "  歌单列表JSON数组，每个歌单包含 songs 数组，每首歌包含：\n"
-        "  - title: 歌曲名\n"
-        "  - artist: 艺术家名\n"
-        "  - duration: 时长\n"
-        "  **重要**: 要播放某个歌单，直接调用 play_playlist_by_name 工具，只需传 playlist_name（如'Beyond'）即可，设备会自动读取并播放，不要自己拼歌曲JSON数组，也不要先调用本工具。",
+        "只用于查看用户有哪些歌单（歌单名称和歌曲数量）。\n"
+        "注意：本工具【不用于播放】。用户说'播放歌单'时不要调用本工具，直接调用 play_playlist_by_name 播放。\n"
+        "Returns: 歌单列表，每项只有 name（歌单名）和 song_count（歌曲数），不含歌曲详情。",
         PropertyList(),
         [](const PropertyList& properties) -> ReturnValue {
             TaskPriorityReset priority_reset(1);  // 避免同步HTTP阻塞音频任务
@@ -364,7 +398,7 @@ void McpServer::AddCommonTools() {
             if (result.empty()) {
                 return "获取歌单失败或没有歌单";
             }
-            return result;
+            return slim_playlist_names_json(result);  // 只返回歌单名，避免大JSON灌入大模型
         });
 
     // 创建新歌单
@@ -523,9 +557,10 @@ void McpServer::AddCommonTools() {
     // 按歌单名播放（语音推荐工具）：用户说"播放XX歌单""播放我的XX歌单""播放XX歌单里的歌"时，
     // 直接传歌单名即可。设备自己读取歌单并播放，无需大模型拼大JSON，避免长文本阻塞导致卡死。
     AddTool("self.music.play_playlist_by_name",
-        "按歌单名称播放整个歌单（连续播放该歌单里的所有歌）。\n"
-        "使用场景：用户说'播放我的歌单''播放XX歌单''播放XX歌单里的歌''放一下XX歌单'时，优先调用本工具。\n"
-        "如果你想不起歌单名，先调用 my_playlists 查看有哪些歌单，再调用本工具。\n"
+        "播放整个歌单的唯一工具：连续播放某个歌单里的所有歌。\n"
+        "用户说'播放我的歌单''播放XX歌单''播放XX歌单里的歌''放一下XX歌单''播放周杰伦歌单'时，"
+        "必须且只能调用本工具，直接把歌单名传给 playlist_name，禁止先调用 my_playlists，也禁止用 play_playlist 工具。\n"
+        "设备会自己读取歌单并播放，你不需要知道歌单里有哪些歌。\n"
         "参数：\n"
         "  `playlist_name`: 歌单名称，例如：Beyond、周杰伦、王杰、我喜欢\n"
         "返回：开始播放歌单的状态。",

@@ -28,6 +28,8 @@ public:
     // 歌单相关
     std::string GetFavorites();
     std::string GetUserPlaylists();
+    // 按歌单名取精简歌曲列表（只含 title/artist，约1KB，避免拉全量30KB大JSON卡死音频任务）
+    std::string GetPlaylistSongs(const std::string& name);
 
     // 歌单写操作（设备token鉴权）
     // 创建歌单，成功返回歌单JSON（含 id），失败返回空字符串

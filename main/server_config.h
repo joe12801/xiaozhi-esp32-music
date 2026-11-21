@@ -34,6 +34,7 @@
 // 歌单与收藏 API
 #define FAVORITE_LIST_API_URL MUSIC_SERVER_URL "/api/favorite/list"
 #define PLAYLIST_LIST_API_URL MUSIC_SERVER_URL "/api/user/playlists"
+#define PLAYLIST_SONGS_API_URL MUSIC_SERVER_URL "/api/user/playlist/songs" // 按歌单名取精简歌曲列表（title/artist）
 #define PLAYLIST_DETAIL_API_URL MUSIC_SERVER_URL "/api/user/playlists" // 详情可能需要带ID参数
 #define PLAYLIST_CREATE_API_URL MUSIC_SERVER_URL "/api/user/playlists/create"
 #define PLAYLIST_ADD_SONG_API_URL MUSIC_SERVER_URL "/api/user/playlists/add-song"

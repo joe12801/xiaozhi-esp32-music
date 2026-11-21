@@ -375,6 +375,40 @@ std::string DeviceManager::GetUserPlaylists() {
     }
 }
 
+std::string DeviceManager::GetPlaylistSongs(const std::string& name) {
+    if (device_token_.empty() || name.empty()) {
+        return "";
+    }
+
+    auto& board = Board::GetInstance();
+    auto network = board.GetNetwork();
+    auto http = network->CreateHttp(0);
+
+    // 用 GET query 传歌单名（中文用 esp32_url_encode 编码），避免 POST body
+    // 在该 HttpClient 上走 chunked 导致服务端读不到 name、设备等响应头超时30秒。
+    std::string url = std::string(PLAYLIST_SONGS_API_URL) + "?name=" + esp32_url_encode(name);
+
+    http->SetHeader("X-Device-Token", device_token_.c_str());
+    http->SetHeader("User-Agent", "ESP32-Music-Player/1.0");
+
+    if (!http->Open("GET", url)) {
+        ESP_LOGE(TAG, "GetPlaylistSongs: failed to connect");
+        http->Close();
+        return "";
+    }
+
+    int status = http->GetStatusCode();
+    std::string response = http->ReadAll();
+    http->Close();
+
+    if (status == 200) {
+        ESP_LOGI(TAG, "GetPlaylistSongs('%s'): %u bytes", name.c_str(), response.size());
+        return response;
+    }
+    ESP_LOGW(TAG, "GetPlaylistSongs failed status=%d", status);
+    return "";
+}
+
 std::string DeviceManager::CreateUserPlaylist(const std::string& name, const std::string& description) {
     if (device_token_.empty() || name.empty()) {
         return "";
@@ -399,13 +433,14 @@ std::string DeviceManager::CreateUserPlaylist(const std::string& name, const std
     http->SetHeader("X-Device-Token", device_token_.c_str());
     http->SetHeader("User-Agent", "ESP32-Music-Player/1.0");
     http->SetHeader("Content-Type", "application/json");
+    // 必须在 Open 之前 SetContent：否则该 HttpClient 走 chunked，服务端读不到 body
+    http->SetContent(std::move(request_body));
 
     if (!http->Open("POST", PLAYLIST_CREATE_API_URL)) {
         ESP_LOGE(TAG, "CreateUserPlaylist: failed to connect");
         http->Close();
         return "";
     }
-    http->Write(request_body.c_str(), request_body.length());
 
     int status = http->GetStatusCode();
     std::string response = http->ReadAll();
@@ -453,13 +488,14 @@ bool DeviceManager::AddSongToUserPlaylist(const std::string& playlist_id,
     http->SetHeader("X-Device-Token", device_token_.c_str());
     http->SetHeader("User-Agent", "ESP32-Music-Player/1.0");
     http->SetHeader("Content-Type", "application/json");
+    // 必须在 Open 之前 SetContent：否则该 HttpClient 走 chunked，服务端读不到 body
+    http->SetContent(std::move(request_body));
 
     if (!http->Open("POST", url)) {
         ESP_LOGE(TAG, "AddSongToPlaylist: failed to connect");
         http->Close();
         return false;
     }
-    http->Write(request_body.c_str(), request_body.length());
 
     int status = http->GetStatusCode();
     std::string response = http->ReadAll();
