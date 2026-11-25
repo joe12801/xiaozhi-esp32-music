@@ -23,7 +23,7 @@
 // 也可以在编译时覆盖，不用改这个文件：
 //   idf.py -DMUSIC_SERVER_URL=\"http://192.168.1.100:2233\" build
 #ifndef MUSIC_SERVER_URL
-#define MUSIC_SERVER_URL "http://192.168.2.220:2233"
+#define MUSIC_SERVER_URL "http://192.168.2.221:2233"
 #endif
 
 // 自动生成的完整API地址（不要修改）

@@ -24,3 +24,6 @@ esptool.exe
 # 串口调试日志（可能含 MAC / token 片段，禁止提交）
 serial_*.txt
 /tmp/
+
+# 本地编译输出日志
+build-*.log
