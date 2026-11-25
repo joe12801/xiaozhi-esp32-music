@@ -302,7 +302,8 @@ Esp32Music::~Esp32Music() {
     ESP_LOGI(TAG, "Music player destroyed successfully");
 }
 
-bool Esp32Music::Download(const std::string& song_name, const std::string& artist_name) {
+bool Esp32Music::Download(const std::string& song_name, const std::string& artist_name,
+                          const std::string& source_hint) {
     ESP_LOGI(TAG, "云端由MeowEmbeddedMusicServer喵波音律嵌入式提供");
     ESP_LOGI(TAG, "喵波音律QQ交流群:865754861");
     ESP_LOGI(TAG, "Starting to get music details for: %s", song_name.c_str());
@@ -316,6 +317,12 @@ bool Esp32Music::Download(const std::string& song_name, const std::string& artis
     // 第一步：请求stream_pcm接口获取音频信息
     std::string base_url = MUSIC_SERVER_URL;
     std::string full_url = base_url + "/stream_pcm?song=" + url_encode(song_name) + "&singer=" + url_encode(artist_name);
+    // 指定音源：用户说「油管的长城」时 source_hint=mp3api，服务端会跳过国内源直接走 YouTube。
+    // 服务端也会从歌名开头的「油管」字样里认，所以老服务端忽略这个参数也不会出错。
+    if (!source_hint.empty()) {
+        full_url += "&source=" + url_encode(source_hint);
+        ESP_LOGI(TAG, "指定音源: %s", source_hint.c_str());
+    }
     
     ESP_LOGI(TAG, "Request URL: %s", full_url.c_str());
     

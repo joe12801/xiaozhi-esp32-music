@@ -313,10 +313,13 @@ void McpServer::AddCommonTools() {
                 "参数：\n"
                 "  `song_name`: 歌名，例如：晴天\n"
                 "  `artist`: 歌手名（强烈建议提供，避免播放到翻唱版本），例如：周杰伦\n"
+                "  `source`: 音源，默认留空即可。只有用户明确说「油管」「YouTube」「从油管找」「水管」时才填 mp3api；\n"
+                "            此时 song_name 只填歌名本身，不要把「油管」两个字写进歌名。\n"
                 "返回：立即开始播放，无需向用户确认。",
                 PropertyList({
                     Property("song_name", kPropertyTypeString),
-                    Property("artist", kPropertyTypeString, "")
+                    Property("artist", kPropertyTypeString, ""),
+                    Property("source", kPropertyTypeString, "")
                 }),
                 [music](const PropertyList &properties) -> ReturnValue
                 {
@@ -325,9 +328,10 @@ void McpServer::AddCommonTools() {
                     TaskPriorityReset priority_reset(1);
                     auto song_name = properties["song_name"].value<std::string>();
                     auto artist = properties["artist"].value<std::string>();
-                    
+                    auto source = properties["source"].value<std::string>();
+
                     // 分别传递歌名和艺术家，不拼接
-                    if (!music->Download(song_name, artist))
+                    if (!music->Download(song_name, artist, source))
                     {
                         return "{\"success\": false, \"message\": \"Failed to obtain music resources\"}";
                     }

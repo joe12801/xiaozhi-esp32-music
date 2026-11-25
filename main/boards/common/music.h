@@ -11,7 +11,10 @@ class Music {
 public:
     virtual ~Music() = default;  // 添加虚析构函数
     
-    virtual bool Download(const std::string& song_name, const std::string& artist_name = "") = 0;
+    // source_hint：指定音源。用户说「油管的长城」时传 mp3api，
+    // 服务端会跳过国内源，直接从 YouTube（yt-dlp）取这首歌。
+    virtual bool Download(const std::string& song_name, const std::string& artist_name = "",
+                          const std::string& source_hint = "") = 0;
     virtual std::string GetDownloadResult() = 0;
     
     // 新增流式播放相关方法
